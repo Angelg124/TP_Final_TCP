@@ -57,13 +57,11 @@ jobs:
         run: |
           docker rm -f servidor_tcp >/dev/null 2>&1 || true
           docker run -d --name servidor_tcp --net $NETWORK_NAME --ip $SERVER_IP $DOCKER_IMAGE_SERVER:latest
-          echo "Esperando que el servidor inicie..."
-          sleep 10
           docker ps -a
-          docker logs servidor_tcp || true
+          docker logs --tail 50 servidor_tcp || true
 
       - name: Wait server start
-        run: sleep 5
+        run: sleep 2
 
       - name: Install tcpdump on runner
         run: |
@@ -79,10 +77,8 @@ jobs:
 
       - name: Run client container (will connect and exit)
         run: |
-          echo "Intentando conectar cliente al servidor..."
           docker run --rm --name cliente_tcp --net $NETWORK_NAME $DOCKER_IMAGE_CLIENT:latest || true
-          echo "Verificando logs del servidor después de la conexión:"
-          docker logs servidor_tcp || true
+          sleep 2
 
       - name: Stop tcpdump capture (use SIGINT to flush)
         run: |
@@ -98,4 +94,4 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: captura_trafico_pcap
-          path: captura_trafico.pcap
+          path: captura_trafico.pcap  
