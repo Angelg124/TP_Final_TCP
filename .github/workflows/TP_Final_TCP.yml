@@ -1,0 +1,97 @@
+name: Build, Run, Capture and Push Images (TP Final)
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+
+env:
+  SUBNET: 192.168.67.0/24
+  SERVER_IP: 192.168.67.10
+  NETWORK_NAME: red_tp_tcp
+  DOCKER_IMAGE_SERVER: imagen_servidor_tcp
+  DOCKER_IMAGE_CLIENT: imagen_cliente_tcp
+  SERVER_TAG: itestyr/2025_tp_final:gautehr_angel_67_servidor
+  CLIENT_TAG: itestyr/2025_tp_final:gautehr_angel_67_cliente
+
+jobs:
+  build-run-capture:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build server image
+        run: docker build -t $DOCKER_IMAGE_SERVER:latest ./server
+
+      - name: Build client image
+        run: docker build -t $DOCKER_IMAGE_CLIENT:latest ./client
+
+      - name: Tag images for Docker Hub (itestyr)
+        run: |
+          echo "Tagging images -> $SERVER_TAG and $CLIENT_TAG"
+          docker tag $DOCKER_IMAGE_SERVER:latest $SERVER_TAG
+          docker tag $DOCKER_IMAGE_CLIENT:latest $CLIENT_TAG
+          docker images --format "table {{.Repository}}\t{{.Tag}}\t{{.ID}}" | sed -n '1,20p'
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v2
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Push images to Docker Hub (itestyr)
+        run: |
+          docker push $SERVER_TAG
+          docker push $CLIENT_TAG
+
+      - name: Create docker network (if not exists)
+        run: |
+          docker network inspect "$NETWORK_NAME" >/dev/null 2>&1 || docker network create --driver bridge --subnet $SUBNET $NETWORK_NAME
+
+      - name: Start server container (detached)
+        run: |
+          docker rm -f servidor_tcp >/dev/null 2>&1 || true
+          docker run -d --name servidor_tcp --net $NETWORK_NAME --ip $SERVER_IP $DOCKER_IMAGE_SERVER:latest
+          docker ps -a
+          docker logs --tail 50 servidor_tcp || true
+
+      - name: Wait server start
+        run: sleep 2
+
+      - name: Install tcpdump on runner
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tcpdump
+
+      - name: Start tcpdump in background (capture only port 2025, unbuffered)
+        run: |
+          sudo tcpdump -i any tcp port 2025 -s 0 -w captura_trafico.pcap -U &
+          echo $! > /tmp/tcpdump_pid
+          sleep 1
+          ls -l captura_trafico.pcap || true
+
+      - name: Run client container (will connect and exit)
+        run: |
+          docker run --rm --name cliente_tcp --net $NETWORK_NAME $DOCKER_IMAGE_CLIENT:latest || true
+          sleep 2
+
+      - name: Stop tcpdump capture (use SIGINT to flush)
+        run: |
+          if [ -f /tmp/tcpdump_pid ]; then
+            pid=$(cat /tmp/tcpdump_pid)
+            sudo kill -2 $pid || sudo kill $pid || true
+            sleep 1
+          fi
+          ls -l captura_trafico.pcap || true
+          file captura_trafico.pcap || true
+
+      - name: Upload pcap artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: captura_trafico_pcap
+          path: captura_trafico.pcap
