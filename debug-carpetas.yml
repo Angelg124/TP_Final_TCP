@@ -1,0 +1,25 @@
+name: Debug - Ver carpetas
+
+on:
+  workflow_dispatch:
+
+jobs:
+  debug:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🔍 VER QUE CARPETAS TENGO
+        run: |
+          echo "=== MIRANDO LAS CARPETAS QUE HAY ==="
+          ls -la
+          echo ""
+          echo "=== BUSCANDO CARPETAS DE SERVIDOR ==="
+          find . -type d -name "*server*" -o -name "*servidor*"
+          echo ""
+          echo "=== BUSCANDO CARPETAS DE CLIENTE ==="
+          find . -type d -name "*client*" -o -name "*cliente*"
+          echo ""
+          echo "=== BUSCANDO DOCKERFILES ==="
+          find . -name "Dockerfile*" -type f
