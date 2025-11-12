@@ -57,41 +57,93 @@ jobs:
         run: |
           docker rm -f servidor_tcp >/dev/null 2>&1 || true
           docker run -d --name servidor_tcp --net $NETWORK_NAME --ip $SERVER_IP $DOCKER_IMAGE_SERVER:latest
-          docker ps -a
-          docker logs --tail 50 servidor_tcp || true
+          echo "✅ Servidor iniciado en segundo plano"
+          sleep 5  # Espera inicial después del inicio
 
-      - name: Wait server start
-        run: sleep 2
+      - name: Verify server status
+        run: |
+          echo "=== Estado del contenedor del servidor ==="
+          docker ps -a | grep servidor_tcp
+          
+          echo "=== Logs COMPLETOS del servidor ==="
+          docker logs servidor_tcp
+          
+          echo "=== Verificando proceso interno del servidor ==="
+          docker exec servidor_tcp ps aux || echo "No se puede ejecutar ps en el contenedor"
+          
+          echo "=== Verificando puertos escuchando ==="
+          docker exec servidor_tcp netstat -tulpn 2>/dev/null || docker exec servidor_tcp ss -tulpn 2>/dev/null || echo "No se pueden verificar puertos"
 
-      - name: Install tcpdump on runner
+      - name: Wait for server to be ready
+        run: |
+          echo "⏳ Esperando a que el servidor esté listo..."
+          # Intentar conectarse al puerto 2025 con timeout
+          timeout 30 bash -c '
+            while ! nc -z $SERVER_IP 2025; do
+              echo "Esperando servidor en $SERVER_IP:2025..."
+              sleep 3
+            done
+            echo "✅ Servidor listo en $SERVER_IP:2025"
+          ' || echo "⚠️  No se pudo verificar la conectividad, continuando..."
+
+      - name: Install tcpdump and netcat
         run: |
           sudo apt-get update
-          sudo apt-get install -y tcpdump
+          sudo apt-get install -y tcpdump netcat-openbsd
 
       - name: Start tcpdump in background (capture only port 2025, unbuffered)
         run: |
           sudo tcpdump -i any tcp port 2025 -s 0 -w captura_trafico.pcap -U &
           echo $! > /tmp/tcpdump_pid
-          sleep 1
-          ls -l captura_trafico.pcap || true
+          sleep 2
+          echo "✅ tcpdump iniciado (PID: $(cat /tmp/tcpdump_pid))"
+          ls -lh captura_trafico.pcap || echo "⚠️  Archivo pcap aún no creado"
+
+      - name: Debug before client
+        run: |
+          echo "=== Estado final antes del cliente ==="
+          echo "Servidor IP: $SERVER_IP"
+          echo "Network: $NETWORK_NAME"
+          docker ps -a
+          echo "=== Últimos logs del servidor ==="
+          docker logs --tail 20 servidor_tcp
 
       - name: Run client container (will connect and exit)
         run: |
-          docker run --rm --name cliente_tcp --net $NETWORK_NAME $DOCKER_IMAGE_CLIENT:latest || true
-          sleep 2
+          echo "🚀 Ejecutando cliente..."
+          timeout 60 docker run --rm --name cliente_tcp --net $NETWORK_NAME $DOCKER_IMAGE_CLIENT:latest
+          CLIENT_EXIT_CODE=$?
+          echo "🔚 Cliente finalizado con código: $CLIENT_EXIT_CODE"
+          
+          echo "=== Logs del servidor después del cliente ==="
+          docker logs --tail 30 servidor_tcp
 
       - name: Stop tcpdump capture (use SIGINT to flush)
         run: |
+          echo "🛑 Deteniendo tcpdump..."
           if [ -f /tmp/tcpdump_pid ]; then
             pid=$(cat /tmp/tcpdump_pid)
-            sudo kill -2 $pid || sudo kill $pid || true
-            sleep 1
+            sudo kill -2 $pid 2>/dev/null || sudo kill $pid 2>/dev/null || true
+            sleep 2
           fi
-          ls -l captura_trafico.pcap || true
-          file captura_trafico.pcap || true
+          echo "=== Información del archivo pcap ==="
+          ls -lh captura_trafico.pcap || echo "❌ No se encontró archivo pcap"
+          file captura_trafico.pcap 2>/dev/null || echo "❌ No se puede analizar archivo pcap"
 
       - name: Upload pcap artifact
         uses: actions/upload-artifact@v4
         with:
           name: captura_trafico_pcap
           path: captura_trafico.pcap
+          if-no-files-found: warn
+
+      - name: Final cleanup and logs
+        if: always()
+        run: |
+          echo "=== Limpieza final y logs completos ==="
+          echo "🧹 Deteniendo contenedores..."
+          docker stop servidor_tcp 2>/dev/null || true
+          docker rm -f servidor_tcp 2>/dev/null || true
+          
+          echo "=== LOGS FINALES DEL SERVIDOR ==="
+          docker logs servidor_tcp 2>/dev/null || echo "No hay logs del servidor"
